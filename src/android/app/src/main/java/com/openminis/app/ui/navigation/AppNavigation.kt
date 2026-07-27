@@ -165,6 +165,8 @@ object Routes {
     const val BACKGROUND = "background"
     const val ABOUT = "about"
     const val ONBOARDING_MODELS = "onboarding_models"
+    /** First-run: extract Ubuntu rootfs + install Pi Agent. */
+    const val SANDBOX_SETUP = "sandbox_setup"
     /** T219-2: Mount external folders settings + detail. */
     const val MOUNTED_FOLDERS = "mounted_folders"
     const val MOUNTED_FOLDERS_DETAIL = "mounted_folders_detail/{mountId}"
@@ -516,6 +518,12 @@ fun AppNavigation(
                 onScheduledTasksClick = {
                     navController.safeNavigate(Routes.SCHEDULED_TASKS)
                 },
+                onPrepareSandboxClick = {
+                    navController.safeNavigate(Routes.SANDBOX_SETUP)
+                },
+                onPiChatClick = {
+                    navController.safeNavigate(Routes.PI_CHAT)
+                },
             )
         }
 
@@ -590,6 +598,14 @@ fun AppNavigation(
                 onMountedFoldersClick = { navController.safeNavigate(Routes.MOUNTED_FOLDERS) },
                 onSharedFoldersClick = { navController.safeNavigate(Routes.SHARED_FOLDERS) },
                 onPiChatClick = { navController.safeNavigate(Routes.PI_CHAT) },
+                onSandboxSetupClick = { navController.safeNavigate(Routes.SANDBOX_SETUP) },
+                sandboxReady = run {
+                    val piReady = com.openminis.app.agent.pi.PiAgentService
+                        .getInstance(context)
+                        .installState
+                        .collectAsState().value.installed
+                    piReady && com.openminis.app.sandbox.RootfsManager.getInstance(context).isInstalled
+                },
             )
         }
 
@@ -1209,6 +1225,14 @@ fun AppNavigation(
             OnboardingModelSelectionScreen(
                 providerRepository = providerRepository,
                 onBack = { navController.safePopBackStack() },
+            )
+        }
+
+        composable(Routes.SANDBOX_SETUP) {
+            com.openminis.app.ui.onboarding.SandboxSetupScreen(
+                onComplete = { navController.safePopBackStack() },
+                onSkip = { navController.safePopBackStack() },
+                autoStart = true,
             )
         }
 

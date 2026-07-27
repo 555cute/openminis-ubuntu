@@ -107,7 +107,7 @@ private fun PiHeader(
                 TextButton(onClick = onBack) { Text("←") }
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    "OpenMinis Code · Pi Agent",
+                    "OpenMinis Ubuntu · Pi Agent",
                     fontWeight = FontWeight.SemiBold,
                     fontSize = 18.sp,
                 )

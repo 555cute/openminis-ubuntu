@@ -25,6 +25,7 @@ import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.BatteryFull
 import androidx.compose.material.icons.outlined.BugReport
+import androidx.compose.material.icons.outlined.CloudDownload
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Email
@@ -96,8 +97,10 @@ fun SettingsScreen(
     // T235: Shared Folders entry (Shared / Skills / Memory). Default no-op
     // for back-compat with callers wired before T235.
     onSharedFoldersClick: () -> Unit = {},
-    // OpenMinis Code fork: dev-only Pi Agent backend launcher.
+    // OpenMinis Ubuntu: Pi Agent chat + first-run sandbox setup.
     onPiChatClick: () -> Unit = {},
+    onSandboxSetupClick: () -> Unit = {},
+    sandboxReady: Boolean = false,
     // T50: Background & Notifications screen (battery optimisation +
     // OEM autostart guidance). Default no-op so older callers/tests
     // don't need to be retrofitted.
@@ -206,14 +209,27 @@ fun SettingsScreen(
                     subtitle = stringResource(R.string.settings_mcp_subtitle),
                     onClick = onMcpClick,
                 )
-                // [OpenMinis Code] Dev-only "Pi Agent" entry — switches
-                // chat backend from the in-tree Agent loop to the
-                // bundled Pi Coding Agent running inside the sandbox.
+                // Ubuntu + Pi: first-run setup and the Pi chat surface.
+                SettingsItem(
+                    icon = Icons.Outlined.CloudDownload,
+                    iconColor = Color(0xFF0A84FF),
+                    title = if (sandboxReady) "Ubuntu + Pi setup" else "Prepare Ubuntu + Pi Agent",
+                    subtitle = if (sandboxReady) {
+                        "Sandbox ready — reopen to reinstall"
+                    } else {
+                        "Extract rootfs and install Pi (first-run)"
+                    },
+                    onClick = onSandboxSetupClick,
+                )
                 SettingsItem(
                     icon = Icons.Outlined.Terminal,
                     iconColor = Color(0xFF7B61FF),
-                    title = "Pi Agent (Dev Mode)",
-                    subtitle = "Coding-agent backend powered by earendil-works/pi",
+                    title = "Pi Agent",
+                    subtitle = if (sandboxReady) {
+                        "Coding agent via JSON-RPC inside Ubuntu"
+                    } else {
+                        "Needs sandbox setup first"
+                    },
                     onClick = onPiChatClick,
                 )
                 SettingsItem(

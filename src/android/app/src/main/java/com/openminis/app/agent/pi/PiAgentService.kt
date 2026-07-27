@@ -90,9 +90,23 @@ class PiAgentService private constructor(private val context: Context) {
      * `pi --version` succeeding.
      */
     suspend fun installIfNeeded(): InstallState = withContext(Dispatchers.IO) {
+        fun setProgress(msg: String, progress: Float = 0f, log: String = "") {
+            _installState.value = InstallState(
+                installing = true,
+                progress = progress.coerceIn(0f, 0.99f),
+                statusMessage = msg,
+                logTail = log.takeLast(800),
+            )
+        }
+
+        setProgress("Booting Ubuntu sandbox…", 0.05f)
         if (!PRootKernel.isBooted) {
             PRootKernel.boot(context)
         }
+        // Always ensure proot is staged under filesDir (never exec nativeLibraryDir).
+        RootfsManager.getInstance(context).installProotIfNeeded()
+
+        setProgress("Checking for existing Pi install…", 0.15f)
         val probed = probePi()
         if (probed) {
             val current = InstallState(installed = true, version = readPiVersion())
@@ -100,20 +114,56 @@ class PiAgentService private constructor(private val context: Context) {
             return@withContext current
         }
 
-        _installState.value = InstallState(installing = true, progress = 0f)
-        val result = ShellExecutor.execute(
-            context = context,
-            command = "/usr/local/bin/pi-install 2>&1",
-            timeout = 15 * 60 * 1000L, // 15 min for npm install + node fetch
-        )
+        setProgress("Running pi-install (apt + Node + npm)…", 0.25f)
+        // Stream-ish: poll install log while the long shell runs in parallel
+        // is hard with ShellExecutor's one-shot API; instead run the command
+        // and surface the full output tail on completion. Progress ticks via
+        // a lightweight heartbeat so the UI doesn't look frozen.
+        val heartbeat = scope.launch {
+            var tick = 0.25f
+            while (true) {
+                kotlinx.coroutines.delay(3_000)
+                tick = (tick + 0.03f).coerceAtMost(0.9f)
+                val tail = runCatching {
+                    ShellExecutor.execute(
+                        context = context,
+                        command = "tail -n 12 /var/minis/pi/install.log 2>/dev/null || true",
+                        timeout = 8_000L,
+                    ).output.trim()
+                }.getOrDefault("")
+                setProgress(
+                    msg = "Installing Pi… (still working, may take several minutes)",
+                    progress = tick,
+                    log = tail,
+                )
+            }
+        }
+
+        val result = try {
+            ShellExecutor.execute(
+                context = context,
+                command = "/usr/local/bin/pi-install 2>&1",
+                timeout = 15 * 60 * 1000L, // 15 min for npm install + node fetch
+            )
+        } finally {
+            heartbeat.cancel()
+        }
+
         if (result.exitCode == 0 && probePi()) {
-            val ok = InstallState(installed = true, version = readPiVersion())
+            val ok = InstallState(
+                installed = true,
+                version = readPiVersion(),
+                statusMessage = "Pi ready",
+                logTail = result.output.takeLast(400),
+            )
             _installState.value = ok
             ok
         } else {
             val failed = InstallState(
                 installed = false,
-                error = "pi-install exit=${result.exitCode}; ${result.output.take(400)}"
+                error = "pi-install exit=${result.exitCode}; ${result.output.take(400)}",
+                logTail = result.output.takeLast(800),
+                statusMessage = "Install failed",
             )
             _installState.value = failed
             failed
@@ -399,6 +449,10 @@ class PiAgentService private constructor(private val context: Context) {
         val progress: Float = 0f,
         val version: String? = null,
         val error: String? = null,
+        /** Short human status for onboarding / banners. */
+        val statusMessage: String? = null,
+        /** Recent install log lines for UI debugging. */
+        val logTail: String = "",
     )
 
     companion object {

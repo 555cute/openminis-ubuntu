@@ -280,6 +280,10 @@ fun SessionListScreen(
     onRootfsClick: () -> Unit = {},
     // [T-android-scheduled-tasks-design] Entry to the scheduled-tasks list.
     onScheduledTasksClick: () -> Unit = {},
+    /** Open the Ubuntu + Pi first-run setup screen. */
+    onPrepareSandboxClick: () -> Unit = {},
+    /** Open Pi Agent chat (after sandbox is ready). */
+    onPiChatClick: () -> Unit = {},
 ) {
     val context = LocalContext.current
     // T46: hoist VM ownership to the NavBackStackEntry's ViewModelStore so
@@ -311,6 +315,31 @@ fun SessionListScreen(
     val configLoaded by providerRepository.configLoaded.collectAsState()
     val scope = rememberCoroutineScope()
     val isDark = isSystemInDarkTheme()
+
+    // Sandbox / Pi readiness for onboarding step 3.
+    val piAgent = remember {
+        com.openminis.app.agent.pi.PiAgentService.getInstance(context)
+    }
+    val piInstall by piAgent.installState.collectAsState()
+    val rootfsInstalled = remember {
+        com.openminis.app.sandbox.RootfsManager.getInstance(context).isInstalled
+    }
+    // Re-check rootfs after setup returns: cheap file probe on each recomposition
+    // when sessions empty (onboarding only).
+    var sandboxReady by remember {
+        mutableStateOf(rootfsInstalled && piInstall.installed)
+    }
+    LaunchedEffect(piInstall.installed) {
+        sandboxReady =
+            com.openminis.app.sandbox.RootfsManager.getInstance(context).isInstalled &&
+                piInstall.installed
+    }
+    // Warm rootfs extract in background on first empty landing so step 3 is faster.
+    LaunchedEffect(configLoaded, sessions.isEmpty()) {
+        if (configLoaded && sessions.isEmpty() && !sandboxReady) {
+            com.openminis.app.ui.onboarding.warmSandboxInBackground(context)
+        }
+    }
 
     // [T-android-search-focus-sticky] When the user opens search but types
     // nothing (or only whitespace) and then navigates into a chat, the
@@ -560,14 +589,17 @@ fun SessionListScreen(
                         OnboardingLanding(
                             hasProviders = hasProviders,
                             hasGroups = hasGroups,
+                            sandboxReady = sandboxReady,
                             onAddProvider = onAddProviderClick,
                             onSelectModels = onSelectModelsClick,
+                            onPrepareSandbox = onPrepareSandboxClick,
                             onStartConversation = {
                                 scope.launch {
                                     val sessionId = viewModel.createNewSession()
                                     if (sessionId != null) onNewChatGuarded(sessionId)
                                 }
                             },
+                            onOpenPi = onPiChatClick,
                         )
                     }
                 } else {
@@ -1517,9 +1549,12 @@ private fun SessionBadgeOverlay(
 private fun OnboardingLanding(
     hasProviders: Boolean,
     hasGroups: Boolean,
+    sandboxReady: Boolean,
     onAddProvider: () -> Unit,
     onSelectModels: () -> Unit,
+    onPrepareSandbox: () -> Unit,
     onStartConversation: () -> Unit,
+    onOpenPi: () -> Unit,
 ) {
     Column(
         modifier = Modifier
@@ -1584,18 +1619,44 @@ private fun OnboardingLanding(
                 onClick = { if (hasProviders && !hasGroups) onSelectModels() },
             )
 
+            // Step 3: Ubuntu sandbox + Pi Agent (install once, then ready).
             SetupStepCard(
                 number = 3,
+                title = "Prepare Ubuntu + Pi Agent",
+                subtitle = when {
+                    sandboxReady -> "Done — sandbox & Pi ready"
+                    hasGroups -> "Extract rootfs and install Pi (needs network once)"
+                    else -> "Finish provider & models first"
+                },
+                isDone = sandboxReady,
+                isLocked = !hasGroups,
+                onClick = { if (hasGroups && !sandboxReady) onPrepareSandbox() },
+            )
+
+            SetupStepCard(
+                number = 4,
                 title = stringResource(R.string.sessionlist_welcome_step3_title),
-                subtitle = if (hasGroups) {
-                    stringResource(R.string.sessionlist_welcome_step3_subtitle)
-                } else {
-                    stringResource(R.string.sessionlist_welcome_step3_locked)
+                subtitle = when {
+                    !hasGroups -> stringResource(R.string.sessionlist_welcome_step3_locked)
+                    !sandboxReady -> "Optional: prepare sandbox first for Pi"
+                    else -> stringResource(R.string.sessionlist_welcome_step3_subtitle)
                 },
                 isDone = false,
+                // Allow starting Minis chat even if sandbox step skipped.
                 isLocked = !hasGroups,
                 onClick = { if (hasGroups) onStartConversation() },
             )
+
+            if (sandboxReady) {
+                SetupStepCard(
+                    number = 5,
+                    title = "Open Pi Agent",
+                    subtitle = "Coding agent over JSON-RPC inside Ubuntu",
+                    isDone = false,
+                    isLocked = false,
+                    onClick = onOpenPi,
+                )
+            }
         }
     }
 }
