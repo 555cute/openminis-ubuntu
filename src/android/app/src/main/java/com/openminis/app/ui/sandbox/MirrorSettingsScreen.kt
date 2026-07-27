@@ -458,12 +458,17 @@ object MirrorSpeedTestViewModel {
         val content = when (category) {
             MirrorCategory.UBUNTU -> {
                 val base = mirror.baseURL.trimEnd('/') + "/"
-                """
-                deb $base noble main restricted universe multiverse
-                deb $base noble-updates main restricted universe multiverse
-                deb $base noble-security main restricted universe multiverse
-                """.trimIndent() + "
-"
+                buildString {
+                    append("deb ")
+                    append(base)
+                    appendLine(" noble main restricted universe multiverse")
+                    append("deb ")
+                    append(base)
+                    appendLine(" noble-updates main restricted universe multiverse")
+                    append("deb ")
+                    append(base)
+                    appendLine(" noble-security main restricted universe multiverse")
+                }
             }
             MirrorCategory.PIP -> {
                 val host = try { URI(mirror.baseURL).host ?: "" } catch (_: Exception) { "" }
