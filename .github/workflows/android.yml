@@ -1,0 +1,76 @@
+name: Build APK
+
+on:
+  push:
+    branches: [main, dev/ubuntu-agent]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew || true
+
+      # Download the Ubuntu base rootfs tarball + PRoot aarch64 binary
+      # into assets/. Without this, RootfsManager.installIfNeeded()
+      # throws FileNotFoundException on first sandbox boot.
+      - name: Prepare Android sandbox assets
+        run: |
+          set -e
+          bash scripts/prepare_android_sandbox.sh
+          ls -lh src/android/app/src/main/assets/ubuntu-base-rootfs.tar.gz \
+                 src/android/app/src/main/assets/proot-aarch64
+
+      # OpenMinis builds PRoot and the Alpine rootfs from source as
+      # part of the Android sandbox. Both are deterministic on Ubuntu
+      # runners so we just let them run.
+      - name: Build Android debug APK
+        run: |
+          set -e
+          cd src/android
+          if [ -f ./gradlew ]; then
+            ./gradlew assembleDebug --stacktrace
+          else
+            gradle wrapper --gradle-version 8.7
+            ./gradlew assembleDebug --stacktrace
+          fi
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: openminis-ubuntu-debug
+          path: |
+            src/android/app/build/outputs/apk/debug/*.apk
+            */build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      - name: Upload mapping (if any)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: openminis-ubuntu-logs
+          path: |
+            **/build/outputs/logs/**
+            **/build/reports/**
+          if-no-files-found: ignore

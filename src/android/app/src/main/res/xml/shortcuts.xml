@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  T-android-app-icon-shortcuts: app-icon long-press quick actions.
+  Mirrors iOS Shared/QuickActionRouter.swift 1:1 (newChat / voiceChat / cameraChat).
+  Each shortcut launches MainActivity via a minis://action/<name> deep-link
+  parsed by DeepLinkHandler → DeepLinkAction.{NewChat,NewVoiceChat,NewCameraChat}.
+
+  [OpenMinis Code] Hardcode the fork's applicationId (com.openminis.code)
+  because resource XML does NOT see AAPT's manifest placeholder pass — only
+  the merged AndroidManifest.xml does. The previous value (com.openminis.app)
+  was the upstream install id; in this fork it would route the deep link
+  to a package that does not exist on this device, so the long-press
+  shortcuts silently no-op'd.
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="new_chat"
+        android:enabled="true"
+        android:icon="@mipmap/ic_shortcut_new_chat"
+        android:shortcutShortLabel="@string/shortcut_new_chat_short"
+        android:shortcutLongLabel="@string/shortcut_new_chat_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.openminis.code"
+            android:targetClass="com.openminis.app.MainActivity"
+            android:data="minis://action/new_chat" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="voice_chat"
+        android:enabled="true"
+        android:icon="@mipmap/ic_shortcut_voice_chat"
+        android:shortcutShortLabel="@string/shortcut_voice_chat_short"
+        android:shortcutLongLabel="@string/shortcut_voice_chat_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.openminis.code"
+            android:targetClass="com.openminis.app.MainActivity"
+            android:data="minis://action/voice_chat" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+    <shortcut
+        android:shortcutId="camera_chat"
+        android:enabled="true"
+        android:icon="@mipmap/ic_shortcut_camera_chat"
+        android:shortcutShortLabel="@string/shortcut_camera_chat_short"
+        android:shortcutLongLabel="@string/shortcut_camera_chat_long">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="com.openminis.code"
+            android:targetClass="com.openminis.app.MainActivity"
+            android:data="minis://action/camera_chat" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+</shortcuts>

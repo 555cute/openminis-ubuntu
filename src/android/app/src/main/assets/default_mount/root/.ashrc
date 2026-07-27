@@ -1,0 +1,2 @@
+# Compat stub — Ubuntu Agent uses bash (.bashrc).
+# Kept so older ENV=$HOME/.ashrc settings don't error.
