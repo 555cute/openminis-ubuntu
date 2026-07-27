@@ -41,7 +41,27 @@ sealed class RootfsInstallState {
 class RootfsManager private constructor(private val context: Context) {
 
     val rootfsDir: File = File(context.filesDir, "ubuntu-rootfs")
-    val prootBinary: File = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+        /**
+     * Resolved PRoot executable.
+     *
+     * Prefer the PackageManager-extracted JNI lib
+     * (`nativeLibraryDir/libproot.so`) when present — that path is
+     * executable by design. Fall back to the app-private staged copy
+     * under `filesDir/bin/proot` (written from assets/proot-aarch64).
+     * NEVER write into nativeLibraryDir at runtime: on modern Android
+     * it is a read-only APK mount and open() returns EACCES.
+     */
+    val prootBinary: File
+        get() {
+            val jni = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+            if (jni.exists() && jni.canExecute() && jni.length() > 0L) return jni
+            return stagedProotBinary
+        }
+
+    /** App-private staging path for the vendored Termux proot asset. */
+    val stagedProotBinary: File
+        get() = File(File(context.filesDir, "bin"), "proot")
+
 
     private val archFile: File get() = File(rootfsDir, ".arch")
 
@@ -177,12 +197,21 @@ class RootfsManager private constructor(private val context: Context) {
      * exec()'d directly by PRoot's own loader scheme.
      */
     suspend fun installProotIfNeeded() = withContext(Dispatchers.IO) {
-        if (prootBinary.exists() && prootBinary.canExecute()) {
-            Log.d(TAG, "PRoot binary available at $prootBinary")
+        // 1) JNI-extracted lib (from jniLibs/arm64-v8a/libproot.so in the APK).
+        val jni = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+        if (jni.exists() && jni.canExecute() && jni.length() > 0L) {
+            Log.d(TAG, "PRoot JNI binary available at $jni (${jni.length()} bytes)")
             return@withContext
         }
 
-        // Stage the vendored asset if we have one.
+        // 2) Already staged into app-private filesDir.
+        val staged = stagedProotBinary
+        if (staged.exists() && staged.canExecute() && staged.length() > 0L) {
+            Log.d(TAG, "PRoot staged binary available at $staged (${staged.length()} bytes)")
+            return@withContext
+        }
+
+        // 3) Copy assets/proot-aarch64 → filesDir/bin/proot (writable + executable).
         val assetStream = try {
             context.assets.open(PROOT_ASSET)
         } catch (_: java.io.FileNotFoundException) {
@@ -190,19 +219,35 @@ class RootfsManager private constructor(private val context: Context) {
         }
         if (assetStream != null) {
             assetStream.use { input ->
-                prootBinary.parentFile?.mkdirs()
-                prootBinary.outputStream().use { out -> input.copyTo(out) }
+                staged.parentFile?.mkdirs()
+                // Write to a temp file then rename so a crashed mid-copy
+                // never leaves a half-written "executable".
+                val tmp = File(staged.parentFile, "proot.tmp")
+                tmp.outputStream().use { out -> input.copyTo(out) }
+                tmp.setExecutable(true, false)
+                tmp.setReadable(true, false)
+                if (staged.exists()) staged.delete()
+                if (!tmp.renameTo(staged)) {
+                    tmp.copyTo(staged, overwrite = true)
+                    tmp.delete()
+                    staged.setExecutable(true, false)
+                    staged.setReadable(true, false)
+                }
             }
-            prootBinary.setExecutable(true, false)
-            prootBinary.setReadable(true, false)
-            Log.i(TAG, "PRoot staged from asset: $prootBinary (${prootBinary.length()} bytes)")
+            if (!staged.exists() || !staged.canExecute()) {
+                throw IllegalStateException(
+                    "Failed to stage PRoot to $staged (exists=${staged.exists()}, " +
+                        "exec=${staged.canExecute()}, size=${staged.length()})"
+                )
+            }
+            Log.i(TAG, "PRoot staged from asset: $staged (${staged.length()} bytes)")
             return@withContext
         }
 
         throw IllegalStateException(
-            "PRoot binary not found at $prootBinary and no " +
-                "$PROOT_ASSET asset to fall back on. Build the JNI lib " +
-                "via deps/build_proot.sh (requires NDK r28+) or run " +
+            "PRoot binary not found at $jni and no $PROOT_ASSET asset to fall " +
+                "back on. Either ship jniLibs/arm64-v8a/libproot.so, run " +
+                "deps/build_proot.sh (NDK r28+), or run " +
                 "scripts/prepare_android_sandbox.sh to vendor the binary."
         )
     }
@@ -353,6 +398,15 @@ class RootfsManager private constructor(private val context: Context) {
             return@withContext
         }
 
+        // Fast path: overlay already applied at this version. Re-running the
+        // full asset walk on every boot was a noticeable hitch (esp. with the
+        // minis-mcp-cli python tree) even when nothing had changed.
+        val versionFile = File(rootfsDir, OVERLAY_VERSION_FILE)
+        if (versionFile.exists() && versionFile.readText().trim() == OVERLAY_VERSION) {
+            Log.d(TAG, "[DefaultMount] overlay $OVERLAY_VERSION already applied, skipping")
+            return@withContext
+        }
+
         // AssetManager.list() returns an empty array for both "leaf file" and
         // "missing path", so probe for children before recursing — otherwise
         // a missing overlay dir would be mistaken for a single leaf file.
@@ -392,6 +446,12 @@ class RootfsManager private constructor(private val context: Context) {
 
         val elapsedMs = (System.nanoTime() - startNs) / 1_000_000.0
         Log.i(TAG, "[DefaultMount] Done. $fileCount file(s) overlaid, $markerRemoved EXTERNALLY-MANAGED marker(s) removed, $lockedCount minis-mcp-cli lib path(s) locked read-only in %.1fms".format(elapsedMs))
+        try {
+            versionFile.writeText(OVERLAY_VERSION)
+            Log.d(TAG, "[DefaultMount] wrote overlay stamp $OVERLAY_VERSION")
+        } catch (t: Throwable) {
+            Log.w(TAG, "[DefaultMount] failed to write overlay stamp: ${t.message}")
+        }
     }
 
     /**
@@ -660,6 +720,15 @@ class RootfsManager private constructor(private val context: Context) {
         private const val ROOTFS_ASSET_TAR = "ubuntu-base-rootfs.tar"
         private const val PROOT_ASSET = "proot-aarch64"
         private const val DEFAULT_MOUNT_ASSET = "default_mount"
+
+        /**
+         * Bump when default_mount/ contents change so existing installs
+         * re-apply the overlay exactly once per app upgrade. Avoids
+         * rewriting dozens of profile/wrapper files on every
+         * PRootKernel.boot() — a major source of first-shell jank.
+         */
+        private const val OVERLAY_VERSION = "ubuntu-1"
+        private const val OVERLAY_VERSION_FILE = ".minis-overlay-version"
 
         /**
          * Rootfs paths whose contents must be executable. Matches iOS

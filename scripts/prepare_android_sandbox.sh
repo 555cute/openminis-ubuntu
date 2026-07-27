@@ -123,6 +123,18 @@ else
     echo "✓ Extracted PRoot binary: $PROOT_FILE ($(du -h "$PROOT_FILE" | cut -f1))"
 fi
 
+# Also install as a real JNI lib so PackageManager extracts an executable
+# into nativeLibraryDir on install. Writing there at runtime fails with
+# EACCES on modern Android (read-only APK lib mount).
+JNI_DIR="$PROJECT_ROOT/src/android/app/src/main/jniLibs/arm64-v8a"
+mkdir -p "$JNI_DIR"
+if [ -f "$PROOT_FILE" ]; then
+    cp -f "$PROOT_FILE" "$JNI_DIR/libproot.so"
+    chmod 755 "$JNI_DIR/libproot.so"
+    echo "✓ Installed JNI lib: $JNI_DIR/libproot.so"
+fi
+
+
 echo ""
 echo "Assets ready in: $ASSETS_DIR"
 ls -lh "$ROOTFS_FILE" "$PROOT_FILE"

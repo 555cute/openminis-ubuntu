@@ -40,7 +40,8 @@ jobs:
           set -e
           bash scripts/prepare_android_sandbox.sh
           ls -lh src/android/app/src/main/assets/ubuntu-base-rootfs.tar.gz \
-                 src/android/app/src/main/assets/proot-aarch64
+                 src/android/app/src/main/assets/proot-aarch64 \
+                 src/android/app/src/main/jniLibs/arm64-v8a/libproot.so
 
       # OpenMinis builds PRoot and the Alpine rootfs from source as
       # part of the Android sandbox. Both are deterministic on Ubuntu

@@ -50,7 +50,11 @@ class PiChatViewModel(
                         it.copy(
                             installState = PiAgentService.InstallState(
                                 installed = false,
-                                error = "Install failed: ${t.javaClass.simpleName}: ${t.message}",
+                                error = "Install failed: ${t.javaClass.simpleName}: ${t.message}" +
+                                (if (t.message?.contains("EACCES") == true ||
+                                    t.message?.contains("Permission denied") == true)
+                                    " — proot could not be staged (fixed in 0.1.1-ubuntu: uses filesDir/jniLibs, not read-only nativeLibraryDir)"
+                                else ""),
                             ),
                             lastError = "install failed: ${t.message}",
                         )
