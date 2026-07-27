@@ -41,26 +41,54 @@ sealed class RootfsInstallState {
 class RootfsManager private constructor(private val context: Context) {
 
     val rootfsDir: File = File(context.filesDir, "ubuntu-rootfs")
-        /**
-     * Resolved PRoot executable.
+
+    /**
+     * PRoot executable used by [PRootKernel.buildProotCommand].
      *
-     * Prefer the PackageManager-extracted JNI lib
-     * (`nativeLibraryDir/libproot.so`) when present — that path is
-     * executable by design. Fall back to the app-private staged copy
-     * under `filesDir/bin/proot` (written from assets/proot-aarch64).
-     * NEVER write into nativeLibraryDir at runtime: on modern Android
-     * it is a read-only APK mount and open() returns EACCES.
+     * ALWAYS the app-private staged copy under `filesDir/bin/proot`.
+     * Do NOT exec from `nativeLibraryDir/libproot.so`: on many devices
+     * (incl. the user's) that path is an APK lib mount where open/exec
+     * returns EACCES even though PackageManager extracted the file and
+     * `File.canExecute()` reports true. ProcessBuilder needs a real
+     * filesDir ELF we own.
      */
     val prootBinary: File
-        get() {
-            val jni = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
-            if (jni.exists() && jni.canExecute() && jni.length() > 0L) return jni
-            return stagedProotBinary
-        }
+        get() = stagedProotBinary
 
     /** App-private staging path for the vendored Termux proot asset. */
     val stagedProotBinary: File
         get() = File(File(context.filesDir, "bin"), "proot")
+
+    /** Marker next to staged proot so we can re-stage after APK upgrade. */
+    private val stagedProotMarker: File
+        get() = File(File(context.filesDir, "bin"), "proot.staged-from")
+
+    private fun stageProotFrom(source: InputStream, sourceLabel: String): File {
+        val staged = stagedProotBinary
+        staged.parentFile?.mkdirs()
+        val tmp = File(staged.parentFile, "proot.tmp")
+        source.use { input ->
+            tmp.outputStream().use { out -> input.copyTo(out) }
+        }
+        tmp.setReadable(true, false)
+        tmp.setExecutable(true, false)
+        if (staged.exists()) staged.delete()
+        if (!tmp.renameTo(staged)) {
+            tmp.copyTo(staged, overwrite = true)
+            tmp.delete()
+            staged.setReadable(true, false)
+            staged.setExecutable(true, false)
+        }
+        stagedProotMarker.writeText(sourceLabel)
+        if (!staged.exists() || !staged.canExecute() || staged.length() <= 0L) {
+            throw IllegalStateException(
+                "Failed to stage PRoot to $staged (exists=${staged.exists()}, " +
+                    "exec=${staged.canExecute()}, size=${staged.length()}, from=$sourceLabel)"
+            )
+        }
+        Log.i(TAG, "PRoot staged from $sourceLabel → $staged (${staged.length()} bytes)")
+        return staged
+    }
 
 
     private val archFile: File get() = File(rootfsDir, ".arch")
@@ -181,74 +209,59 @@ class RootfsManager private constructor(private val context: Context) {
     val nativeLibDir: File = File(context.applicationInfo.nativeLibraryDir)
 
     /**
-     * Verify PRoot binary is available in the native library directory.
+     * Ensure [prootBinary] (`filesDir/bin/proot`) exists and is executable.
      *
-     * [OpenMinis Code] Fallback path: the public OpenMinis mirror ships
-     * the Termux-built proot as a vendored asset (`assets/proot-aarch64`,
-     * see scripts/prepare_android_sandbox.sh). When the JNI .so is
-     * missing — typically because the fork was built without first
-     * running `deps/build_proot.sh` (which needs NDK r28+) — we copy
-     * the asset into nativeLibraryDir under the conventional
-     * `libproot.so` name and chmod +x. Code that spawns proot does so
-     * via `cmd.add(prootBinary.absolutePath)` and treats it as a
-     * standalone executable, so the fact that the asset binary is a
-     * guest arch executable (Termux-format) rather than a JNI .so is
-     * irrelevant: it never gets loaded via System.loadLibrary — it's
-     * exec()'d directly by PRoot's own loader scheme.
+     * Source priority:
+     *  1. Already-staged filesDir copy (same size as best available source)
+     *  2. assets/proot-aarch64 (vendored Termux static build)
+     *  3. nativeLibraryDir/libproot.so (jniLibs) — READ ONLY as a copy source;
+     *     never exec from there (EACCES on many devices)
+     *
+     * ProcessBuilder execs the staged path only. See [prootBinary] docs.
      */
     suspend fun installProotIfNeeded() = withContext(Dispatchers.IO) {
-        // 1) JNI-extracted lib (from jniLibs/arm64-v8a/libproot.so in the APK).
-        val jni = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
-        if (jni.exists() && jni.canExecute() && jni.length() > 0L) {
-            Log.d(TAG, "PRoot JNI binary available at $jni (${jni.length()} bytes)")
-            return@withContext
-        }
-
-        // 2) Already staged into app-private filesDir.
         val staged = stagedProotBinary
-        if (staged.exists() && staged.canExecute() && staged.length() > 0L) {
-            Log.d(TAG, "PRoot staged binary available at $staged (${staged.length()} bytes)")
-            return@withContext
+        val jni = File(context.applicationInfo.nativeLibraryDir, "libproot.so")
+        val expectedSize: Long = try {
+            context.assets.openFd(PROOT_ASSET).use { it.length }
+        } catch (_: Exception) {
+            if (jni.exists()) jni.length() else -1L
         }
 
-        // 3) Copy assets/proot-aarch64 → filesDir/bin/proot (writable + executable).
+        // Reuse staged copy when present, executable, and size still matches
+        // the APK asset (or JNI lib) so upgrades re-stage automatically.
+        if (staged.exists() && staged.canExecute() && staged.length() > 0L) {
+            if (expectedSize <= 0L || staged.length() == expectedSize) {
+                Log.d(TAG, "PRoot staged binary ready at $staged (${staged.length()} bytes)")
+                return@withContext
+            }
+            Log.i(
+                TAG,
+                "PRoot staged size ${staged.length()} != expected $expectedSize; re-staging",
+            )
+        }
+
+        // Prefer asset stream (always present in our CI APK).
         val assetStream = try {
             context.assets.open(PROOT_ASSET)
         } catch (_: java.io.FileNotFoundException) {
             null
         }
         if (assetStream != null) {
-            assetStream.use { input ->
-                staged.parentFile?.mkdirs()
-                // Write to a temp file then rename so a crashed mid-copy
-                // never leaves a half-written "executable".
-                val tmp = File(staged.parentFile, "proot.tmp")
-                tmp.outputStream().use { out -> input.copyTo(out) }
-                tmp.setExecutable(true, false)
-                tmp.setReadable(true, false)
-                if (staged.exists()) staged.delete()
-                if (!tmp.renameTo(staged)) {
-                    tmp.copyTo(staged, overwrite = true)
-                    tmp.delete()
-                    staged.setExecutable(true, false)
-                    staged.setReadable(true, false)
-                }
-            }
-            if (!staged.exists() || !staged.canExecute()) {
-                throw IllegalStateException(
-                    "Failed to stage PRoot to $staged (exists=${staged.exists()}, " +
-                        "exec=${staged.canExecute()}, size=${staged.length()})"
-                )
-            }
-            Log.i(TAG, "PRoot staged from asset: $staged (${staged.length()} bytes)")
+            stageProotFrom(assetStream, "asset:$PROOT_ASSET")
+            return@withContext
+        }
+
+        // Last resort: copy bytes out of the JNI-extracted lib into filesDir.
+        if (jni.exists() && jni.length() > 0L) {
+            stageProotFrom(jni.inputStream(), "jni:${jni.absolutePath}")
             return@withContext
         }
 
         throw IllegalStateException(
-            "PRoot binary not found at $jni and no $PROOT_ASSET asset to fall " +
-                "back on. Either ship jniLibs/arm64-v8a/libproot.so, run " +
-                "deps/build_proot.sh (NDK r28+), or run " +
-                "scripts/prepare_android_sandbox.sh to vendor the binary."
+            "PRoot binary missing: no $PROOT_ASSET asset and no $jni. " +
+                "Run scripts/prepare_android_sandbox.sh (vendors proot + jniLibs) " +
+                "or deps/build_proot.sh (NDK r28+)."
         )
     }
 

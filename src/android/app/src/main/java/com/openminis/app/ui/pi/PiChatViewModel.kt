@@ -53,7 +53,7 @@ class PiChatViewModel(
                                 error = "Install failed: ${t.javaClass.simpleName}: ${t.message}" +
                                 (if (t.message?.contains("EACCES") == true ||
                                     t.message?.contains("Permission denied") == true)
-                                    " — proot could not be staged (fixed in 0.1.1-ubuntu: uses filesDir/jniLibs, not read-only nativeLibraryDir)"
+                                    " — proot exec path still blocked; 0.1.2 always stages to filesDir/bin/proot (never exec from nativeLibraryDir)"
                                 else ""),
                             ),
                             lastError = "install failed: ${t.message}",

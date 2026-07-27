@@ -1332,8 +1332,13 @@ fun ChatScreen(
     // users who had scrolled up to read history and then opened the keyboard
     // to send a follow-up — auto-follow then yanked them away from where
     // they were reading.
+    // IME inset is animated continuously while the keyboard slides in/out.
+    // Reading raw px every frame used to flip scroll state repeatedly and
+    // fight LazyColumn during the animation (visible as "open keyboard = jank").
+    // Only react when the keyboard crosses the shown/hidden threshold.
     val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
-    LaunchedEffect(imeBottomPx) {
+    val imeVisible = imeBottomPx > 0
+    LaunchedEffect(imeVisible) {
         if (userScrolledAway && isNearBottom.value) userScrolledAway = false
     }
     // [T-android-tool-autoscroll] Start-of-turn edge from ViewModel: resume() /

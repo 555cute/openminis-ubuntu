@@ -171,7 +171,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@style/Theme.Minis"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustNothing">
             <!-- T-android-dynamic-app-icon: LAUNCHER intent-filter moved
                  to the <activity-alias> entries below so the user can pick
                  an alternate icon. Exactly one alias is enabled at a time
