@@ -164,24 +164,8 @@ object MirrorCatalog {
     val allMirrors: List<MirrorEntry> = ubuntuMirrors + pipMirrors + npmMirrors
 
     fun mirrors(category: MirrorCategory): List<MirrorEntry> = when (category) {
-                    MirrorCategory.UBUNTU -> {
-                val base = mirror.baseURL.trimEnd('/') + "/"
-                buildString {
-                    append("deb ")
-                    append(base)
-                    append(" noble main restricted universe multiverse
-")
-                    append("deb ")
-                    append(base)
-                    append(" noble-updates main restricted universe multiverse
-")
-                    append("deb ")
-                    append(base)
-                    append(" noble-security main restricted universe multiverse
-")
-                }
-            }
-            MirrorCategory.PIP -> pipMirrors
+        MirrorCategory.UBUNTU -> ubuntuMirrors
+        MirrorCategory.PIP -> pipMirrors
         MirrorCategory.NPM -> npmMirrors
     }
 
